@@ -1,0 +1,588 @@
+--[[\
+    (C) All rights reserved to NOT_IITIAN
+    Quiz: General Trivia Medium Level Simulation (With Live GUI Controller Integration)
+]]--
+
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ChatService = game:GetService("Chat")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Clean up any existing UI
+if CoreGui:FindFirstChild("TriviaMediumQuizControllerUI") then
+    CoreGui.TriviaMediumQuizControllerUI:Destroy()
+end
+
+----------------------------------------------------
+-- GLOBAL CONFIGURATION & STATES
+----------------------------------------------------
+local QuizConfig = {
+    IsRunning = true,
+    ReadTime = 16,            -- Default reading time (seconds)
+    WithOptions = true,       -- Default mode: WITH OPTIONS
+    IgnoredPlayers = {},      -- Spammer usernames list
+    Connections = {}          -- Store connections for clean force stop
+}
+
+local playerScores = {}
+local playerNames = {}
+local hasGuessedOption = {} 
+local quizActive = false
+local optionsAllowed = false 
+local isProcessingAnswer = false
+local correctAnswer = ""     
+local currentWordAnswer = "" 
+local currentQuestionIndex = 1
+local questionSession = 0
+
+-- BLACKLISTED PLAYERS (Banned from Quiz)
+local blacklistedPlayers = {
+	["DELTAFIRE2303"] = true,
+	["VERSA_TILE000"] = true
+}
+
+-- CONFIGURABLE TIMINGS (Seconds)
+local TIMING_DIRECT_OPEN_DELAY = 3
+local TIMING_OPTION_GAP = 2
+local TIMING_ANSWER_WAIT = 12
+local TIMING_POST_ANSWER = 3
+
+----------------------------------------------------
+-- GUI CREATION
+----------------------------------------------------
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "TriviaMediumQuizControllerUI"
+screenGui.ResetOnSpawn = false
+
+if syn and syn.protect_gui then
+    syn.protect_gui(screenGui)
+    screenGui.Parent = CoreGui
+elseif gethui then
+    screenGui.Parent = gethui()
+else
+    screenGui.Parent = CoreGui
+end
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 320, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -160, 0.35, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 40)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "🧠 General Trivia Medium (NOT_IITIAN)"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 12
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.Parent = mainFrame
+
+-- 1. READ TIME CONTROL
+local timeLabel = Instance.new("TextLabel")
+timeLabel.Position = UDim2.new(0, 15, 0, 50)
+timeLabel.Size = UDim2.new(0, 150, 0, 30)
+timeLabel.BackgroundTransparency = 1
+timeLabel.Text = "Read Time (Sec):"
+timeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timeLabel.Font = Enum.Font.SourceSans
+timeLabel.TextSize = 14
+timeLabel.TextXAlignment = Enum.TextXAlignment.Left
+timeLabel.Parent = mainFrame
+
+local timeInput = Instance.new("TextBox")
+timeInput.Position = UDim2.new(0, 175, 0, 50)
+timeInput.Size = UDim2.new(0, 130, 0, 30)
+timeInput.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+timeInput.Text = tostring(QuizConfig.ReadTime)
+timeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+timeInput.Font = Enum.Font.SourceSans
+timeInput.TextSize = 14
+timeInput.Parent = mainFrame
+
+local timeCorner = Instance.new("UICorner")
+timeCorner.CornerRadius = UDim.new(0, 6)
+timeCorner.Parent = timeInput
+
+timeInput.FocusLost:Connect(function()
+    local val = tonumber(timeInput.Text)
+    if val and val > 0 then
+        QuizConfig.ReadTime = val
+        print("[GUI] Read Time updated to: " .. val .. "s")
+    else
+        timeInput.Text = tostring(QuizConfig.ReadTime)
+    end
+end)
+
+-- 2. SPAMMER IGNORE INPUT
+local ignoreInput = Instance.new("TextBox")
+ignoreInput.Position = UDim2.new(0, 15, 0, 95)
+ignoreInput.Size = UDim2.new(0, 190, 0, 30)
+ignoreInput.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+ignoreInput.PlaceholderText = "Enter Spammer Username"
+ignoreInput.Text = ""
+ignoreInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreInput.Font = Enum.Font.SourceSans
+ignoreInput.TextSize = 13
+ignoreInput.Parent = mainFrame
+
+local ignoreCorner = Instance.new("UICorner")
+ignoreCorner.CornerRadius = UDim.new(0, 6)
+ignoreCorner.Parent = ignoreInput
+
+local ignoreBtn = Instance.new("TextButton")
+ignoreBtn.Position = UDim2.new(0, 212, 0, 95)
+ignoreBtn.Size = UDim2.new(0, 93, 0, 30)
+ignoreBtn.BackgroundColor3 = Color3.fromRGB(210, 130, 20)
+ignoreBtn.Text = "Ignore"
+ignoreBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreBtn.Font = Enum.Font.SourceSansBold
+ignoreBtn.TextSize = 13
+ignoreBtn.Parent = mainFrame
+
+local btnCorner1 = Instance.new("UICorner")
+btnCorner1.CornerRadius = UDim.new(0, 6)
+btnCorner1.Parent = ignoreBtn
+
+ignoreBtn.MouseButton1Click:Connect(function()
+    local name = ignoreInput.Text:gsub("%s+", "")
+    if name ~= "" then
+        QuizConfig.IgnoredPlayers[name:lower()] = true
+        print("[GUI] Ignored player added: " .. name)
+        ignoreInput.Text = ""
+        ignoreBtn.Text = "Added!"
+        task.wait(1)
+        ignoreBtn.Text = "Ignore"
+    end
+end)
+
+-- 3. WITH / WITHOUT OPTION TOGGLE
+local modeBtn = Instance.new("TextButton")
+modeBtn.Position = UDim2.new(0, 15, 0, 140)
+modeBtn.Size = UDim2.new(0, 290, 0, 35)
+modeBtn.BackgroundColor3 = Color3.fromRGB(45, 85, 155)
+modeBtn.Text = "Mode: WITH OPTIONS"
+modeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+modeBtn.Font = Enum.Font.SourceSansBold
+modeBtn.TextSize = 14
+modeBtn.Parent = mainFrame
+
+local modeCorner = Instance.new("UICorner")
+modeCorner.CornerRadius = UDim.new(0, 6)
+modeCorner.Parent = modeBtn
+
+modeBtn.MouseButton1Click:Connect(function()
+    QuizConfig.WithOptions = not QuizConfig.WithOptions
+    if QuizConfig.WithOptions then
+        modeBtn.Text = "Mode: WITH OPTIONS"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(45, 85, 155)
+    else
+        modeBtn.Text = "Mode: WITHOUT OPTIONS"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(120, 50, 150)
+    end
+end)
+
+-- Cleanup & Destroy Function
+local function destroyGUIAndStop()
+    QuizConfig.IsRunning = false
+    quizActive = false
+    optionsAllowed = false
+    
+    for _, conn in pairs(QuizConfig.Connections) do
+        if conn and conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    
+    if screenGui and screenGui.Parent then
+        screenGui:Destroy()
+    end
+    print("[SYSTEM] Trivia Medium Controller Shut Down Successfully.")
+end
+
+-- 4. FORCE STOP BUTTON
+local shutdownBtn = Instance.new("TextButton")
+shutdownBtn.Position = UDim2.new(0, 15, 0, 190)
+shutdownBtn.Size = UDim2.new(0, 290, 0, 40)
+shutdownBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+shutdownBtn.Text = "🛑 FORCE STOP & CLOSE"
+shutdownBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+shutdownBtn.Font = Enum.Font.SourceSansBold
+shutdownBtn.TextSize = 15
+shutdownBtn.Parent = mainFrame
+
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 6)
+stopCorner.Parent = shutdownBtn
+
+shutdownBtn.MouseButton1Click:Connect(destroyGUIAndStop)
+
+----------------------------------------------------
+-- UTILITY FUNCTIONS & CHAT SENDER
+----------------------------------------------------
+local function sendChatMessage(msg)
+	pcall(function()
+		if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+			local textChannels = TextChatService:FindFirstChild("TextChannels")
+			local channel = textChannels and textChannels:FindFirstChild("RBXGeneral")
+			if channel then 
+				channel:SendAsync(msg) 
+			else
+				local foundChannel = TextChatService:FindFirstChild("RBXGeneral", true)
+				if foundChannel and foundChannel:IsA("TextChannel") then
+					foundChannel:SendAsync(msg)
+				end
+			end
+		else
+			ChatService:Chat(workspace, msg, Enum.ChatColor.Blue)
+		end
+	end)
+end
+
+local function logInfo(message)
+	print("[NOT_IITIAN_TRIVIA_MEDIUM]: " .. tostring(message))
+end
+
+----------------------------------------------------
+-- DATABASE: TRIVIA MEDIUM
+----------------------------------------------------
+local quizDatabase = {
+	{ 
+		Question = "[Trivia Medium] What is the chemical symbol for the precious metal gold?", 
+		Options = {"A) Ag", "B) Au", "C) Pb", "D) Fe"}, 
+		Answer = "B", 
+		WordAnswer = "AU" 
+	},
+	{ 
+		Question = "[Trivia Medium] Which planet in our solar system is known as the Red Planet?", 
+		Options = {"A) Venus", "B) Jupiter", "C) Mars", "D) Saturn"}, 
+		Answer = "C", 
+		WordAnswer = "MARS" 
+	},
+	{ 
+		Question = "[Trivia Medium] Who wrote the famous play 'Romeo and Juliet'?", 
+		Options = {"A) Charles Dickens", "B) William Shakespeare", "C) Mark Twain", "D) Jane Austen"}, 
+		Answer = "B", 
+		WordAnswer = "SHAKESPEARE" 
+	},
+	{ 
+		Question = "[Trivia Medium] What is the largest mammal living on Earth today?", 
+		Options = {"A) African Elephant", "B) Blue Whale", "C) Sperm Whale", "D) Giraffe"}, 
+		Answer = "B", 
+		WordAnswer = "BLUEWHALE" 
+	},
+	{ 
+		Question = "[Trivia Medium] In which country is the ancient historical monument known as the Great Pyramid of Giza located?", 
+		Options = {"A) Mexico", "B) Peru", "C) Egypt", "D) Greece"}, 
+		Answer = "C", 
+		WordAnswer = "EGYPT" 
+	},
+	{ 
+		Question = "[Trivia Medium] What is the hardest natural substance found on planet Earth?", 
+		Options = {"A) Gold", "B) Iron", "C) Diamond", "D) Quartz"}, 
+		Answer = "C", 
+		WordAnswer = "DIAMOND" 
+	},
+	{ 
+		Question = "[Trivia Medium] How many bones are there in an adult human body approximately?", 
+		Options = {"A) 206", "B) 150", "C) 300", "D) 250"}, 
+		Answer = "A", 
+		WordAnswer = "206" 
+	},
+	{ 
+		Question = "[Trivia Medium] Which gas makes up the majority of Earth's atmosphere?", 
+		Options = {"A) Oxygen", "B) Carbon Dioxide", "C) Nitrogen", "D) Hydrogen"}, 
+		Answer = "C", 
+		WordAnswer = "NITROGEN" 
+	},
+	{ 
+		Question = "[Trivia Medium] What is the capital city of Australia?", 
+		Options = {"A) Sydney", "B) Melbourne", "C) Canberra", "D) Brisbane"}, 
+		Answer = "C", 
+		WordAnswer = "CANBERRA" 
+	},
+	{ 
+		Question = "[Trivia Medium] Who painted the famous masterpiece known as the Mona Lisa?", 
+		Options = {"A) Vincent van Gogh", "B) Leonardo da Vinci", "C) Pablo Picasso", "D) Claude Monet"}, 
+		Answer = "B", 
+		WordAnswer = "LEONARDODAVINCI" 
+	}
+}
+
+-- Custom word answer overrides for clean matching
+quizDatabase[1].WordAnswer = "AU"
+quizDatabase[2].WordAnswer = "MARS"
+quizDatabase[3].WordAnswer = "SHAKESPEARE"
+quizDatabase[4].WordAnswer = "BLUE WHALE"
+quizDatabase[5].WordAnswer = "EGYPT"
+quizDatabase[6].WordAnswer = "DIAMOND"
+quizDatabase[7].WordAnswer = "206"
+quizDatabase[8].WordAnswer = "NITROGEN"
+quizDatabase[9].WordAnswer = "CANBERRA"
+quizDatabase[10].WordAnswer = "LEONARDO DA VINCI"
+
+local askNextQuestion
+local showLeaderboard
+local triggerWin
+
+-- SMART WAIT FUNCTION (Checks IsRunning for dynamic cancellation)
+local function smartWait(seconds)
+	local elapsed = 0
+	while elapsed < seconds do
+		if not QuizConfig.IsRunning then return false end
+		task.wait(0.2)
+		elapsed += 0.2
+	end
+	return true
+end
+
+----------------------------------------------------
+-- LEADERBOARD SYSTEM
+----------------------------------------------------
+showLeaderboard = function()
+	quizActive = false
+	optionsAllowed = false
+	
+	logInfo("Displaying final leaderboard for Trivia Medium.")
+	sendChatMessage("📊 --- TRIVIA MEDIUM FINAL LEADERBOARD ---")
+	if not smartWait(4) then destroyGUIAndStop() return end
+	
+	local sortedScores = {}
+	for userId, score in pairs(playerScores) do
+		table.insert(sortedScores, {name = playerNames[userId] or "Unknown", score = score})
+	end
+	
+	table.sort(sortedScores, function(a, b) 
+		return a.score > b.score 
+	end)
+	
+	if #sortedScores == 0 then
+		sendChatMessage("Nobody scored any points! 😢")
+	else
+		for rank, data in ipairs(sortedScores) do
+			sendChatMessage("🏅 Rank " .. rank .. ": " .. data.name .. " - " .. data.score .. " Pts")
+			if not smartWait(3) then destroyGUIAndStop() return end
+		end
+	end
+	
+	if not smartWait(4) then destroyGUIAndStop() return end
+	sendChatMessage("📢 Quiz finished! All rights reserved to NOT_IITIAN! 🛡️⭐")
+    
+    -- Auto Destroy UI when quiz finishes naturally
+    destroyGUIAndStop()
+end
+
+----------------------------------------------------
+-- WIN TRIGGER SYSTEM
+----------------------------------------------------
+triggerWin = function(player)
+	if isProcessingAnswer then return end
+	isProcessingAnswer = true
+	quizActive = false
+	optionsAllowed = false
+	
+	local userId = player.UserId
+	playerScores[userId] = (playerScores[userId] or 0) + 10
+	playerNames[userId] = player.DisplayName 
+	
+	logInfo("Player " .. player.Name .. " answered correctly!")
+	sendChatMessage("🎉 " .. player.DisplayName .. " Correct answer! (+10 Pts) 🎉")
+	currentQuestionIndex += 1
+	
+	task.wait(2)
+	
+	if currentQuestionIndex > #quizDatabase then 
+		task.spawn(showLeaderboard)
+	else
+		isProcessingAnswer = false
+		task.spawn(askNextQuestion)
+	end
+end
+
+----------------------------------------------------
+-- ANSWER PARSING & CHAT LISTENER LOGIC
+----------------------------------------------------
+local function onPlayerChatted(player, message)
+	if not QuizConfig.IsRunning or not quizActive or isProcessingAnswer then return end
+	
+	-- Blacklist & Spammer Ignore check
+	local playerNameUpper = string.upper(player.Name)
+	local playerDisplayNameUpper = string.upper(player.DisplayName)
+	if blacklistedPlayers[playerNameUpper] or blacklistedPlayers[playerDisplayNameUpper] then
+		return
+	end
+    
+    if QuizConfig.IgnoredPlayers[player.Name:lower()] or QuizConfig.IgnoredPlayers[player.DisplayName:lower()] then
+        return -- Ignored Spammer
+    end
+	
+	local rawTrimmed = string.match(message, "^%s*(.-)%s*$")
+	if not rawTrimmed then return end
+	
+	local upperMsg = string.upper(rawTrimmed)
+	local cleanMsg = string.gsub(upperMsg, "[^%w]", "")
+	
+	local matchedLetter = string.match(upperMsg, "^([A-D])$") or string.match(upperMsg, "^([A-D])[%-%._%)%:]+$")
+	
+	if matchedLetter then
+		-- OPTIONS CHECK: Allowed only if mode has Options enabled
+		if not QuizConfig.WithOptions or not optionsAllowed then return end
+		
+		if hasGuessedOption[player.UserId] then 
+			return 
+		end
+		
+		hasGuessedOption[player.UserId] = true 
+		
+		if matchedLetter == correctAnswer then
+			triggerWin(player)
+		else
+			return
+		end
+	else
+		-- DIRECT WORD CHECK: Allowed instantly
+		local currentQuiz = quizDatabase[currentQuestionIndex]
+		local possibleWords = {}
+		if currentQuiz then
+			table.insert(possibleWords, string.upper(string.gsub(currentQuiz.WordAnswer, "[^%w]", "")))
+			if currentQuiz.WordAnswer == "BLUE WHALE" then
+				table.insert(possibleWords, "BLUEWHALE")
+			elseif currentQuiz.WordAnswer == "LEONARDO DA VINCI" then
+				table.insert(possibleWords, "LEONARDODAVINCI")
+			end
+		end
+		
+		local isCorrectWord = false
+		for _, w in ipairs(possibleWords) do
+			if cleanMsg == w then
+				isCorrectWord = true
+				break
+			end
+		end
+		
+		if isCorrectWord then
+			triggerWin(player)
+		else
+			return
+		end
+	end
+end
+
+----------------------------------------------------
+-- CHAT SYSTEM HOOK INITIALIZATION
+----------------------------------------------------
+if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+	local conn = TextChatService.MessageReceived:Connect(function(textMessage) 
+		if textMessage.TextSource then
+			local targetPlayer = Players:GetPlayerByUserId(textMessage.TextSource.UserId) 
+			if targetPlayer then 
+				onPlayerChatted(targetPlayer, textMessage.Text) 
+			end 
+		end
+	end)
+    table.insert(QuizConfig.Connections, conn)
+else
+	local function hookPlayerInstance(plr)
+		local conn = plr.Chatted:Connect(function(chatMsg)
+			onPlayerChatted(plr, chatMsg)
+		end)
+        table.insert(QuizConfig.Connections, conn)
+	end
+
+	local connAdded = Players.PlayerAdded:Connect(hookPlayerInstance)
+    table.insert(QuizConfig.Connections, connAdded)
+    
+	for _, existingPlayer in ipairs(Players:GetPlayers()) do
+		hookPlayerInstance(existingPlayer)
+	end
+end
+
+----------------------------------------------------
+-- QUESTION FLOW MANAGEMENT
+----------------------------------------------------
+askNextQuestion = function()
+	if not QuizConfig.IsRunning then return end
+
+	if currentQuestionIndex > #quizDatabase then
+		showLeaderboard()
+		return
+	end
+
+	local currentQuiz = quizDatabase[currentQuestionIndex]
+	correctAnswer = string.upper(string.gsub(currentQuiz.Answer, "[^%w]", ""))
+	currentWordAnswer = string.upper(string.gsub(currentQuiz.WordAnswer, "[^%w]", ""))
+	
+	questionSession += 1
+	local currentSession = questionSession
+	
+	hasGuessedOption = {} 
+	quizActive = true
+	optionsAllowed = false 
+	isProcessingAnswer = false
+	
+	logInfo("Asking question index: " .. currentQuestionIndex)
+	
+	-- 1. Direct Word open notification comes FIRST
+	sendChatMessage("💡 Direct Word Guessing is OPEN NOW! (Unlimited Tries)")
+	
+	if not smartWait(TIMING_DIRECT_OPEN_DELAY) then return end 
+	if not quizActive or questionSession ~= currentSession then return end
+	
+	-- 2. Broadcast the Question Text
+	sendChatMessage(currentQuiz.Question)
+	
+	-- 3. Question Reading Phase (Uses dynamic ReadTime from GUI!)
+	if not smartWait(QuizConfig.ReadTime) then return end 
+	if not quizActive or questionSession ~= currentSession then return end
+	
+	-- 4. OPTIONS HANDLING (Checks if 'WITH OPTIONS' mode is active in GUI)
+    if QuizConfig.WithOptions then
+        optionsAllowed = true
+        for _, optionText in ipairs(currentQuiz.Options) do 
+            sendChatMessage(optionText)
+            if not smartWait(TIMING_OPTION_GAP) then return end 
+            if not quizActive or questionSession ~= currentSession then return end
+        end
+    else
+        optionsAllowed = false
+    end
+	
+	if not smartWait(TIMING_ANSWER_WAIT) then return end 
+	
+	if quizActive and questionSession == currentSession then
+		quizActive = false
+		optionsAllowed = false
+		sendChatMessage("⏳ Time's up! Correct answer was: " .. correctAnswer .. " (" .. currentWordAnswer .. ")")
+		currentQuestionIndex += 1
+		
+		task.wait(TIMING_POST_ANSWER)
+		
+		if currentQuestionIndex <= #quizDatabase then 
+			task.spawn(askNextQuestion) 
+		else
+			task.spawn(showLeaderboard) 
+		end
+	end
+end
+
+----------------------------------------------------
+-- SCRIPT INITIALIZATION
+----------------------------------------------------
+task.spawn(function()
+	logInfo("Starting Trivia Medium Script Sequence...")
+	sendChatMessage("(C) All rights reserved to NOT_IITIAN")
+	if not smartWait(3) then return end 
+	sendChatMessage("=== 🧠 GENERAL TRIVIA MEDIUM QUIZ STARTING ===")
+	if not smartWait(3) then return end 
+	askNextQuestion()
+end)
