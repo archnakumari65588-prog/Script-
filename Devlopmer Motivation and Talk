@@ -1,0 +1,56 @@
+--[[\
+    (C) All rights reserved to NOT_IITIAN
+    Motivational Speech by NOT_IITIAN
+]]--
+
+local TextChatService = game:GetService("TextChatService")
+local ChatService = game:GetService("Chat")
+
+local messages = {
+    -- Intro Lines (3-4 seconds gap)
+    {msg = "Motivational Speech by NOT_IITIAN", delay = 4},
+    {msg = "Doston, aaj main bahut khush hoon kyunki maine apni mehnat se 127 scripts ka safar pura kar liya hai.", delay = 15},
+    {msg = "Yeh sirf code nahi hain, yeh meri woh raaton ki mehnat hai jab baaki duniya so rahi thi aur main seekh raha tha.", delay = 15},
+    {msg = "Life mein yaad rakhna, sapne dekhna aasan hai, lekin unhe sach karne ke liye roz thoda-thoda ladna padta hai.", delay = 15},
+    {msg = "Log kahenge ki tum ye nahi kar sakte, par tumhari kamyabi hi unka sabse bada jawab hogi.", delay = 15},
+    {msg = "Apne andar ke us shaks ko kabhi marne mat dena jo kuch naya karne, kuch bada karne ki zidd rakhta hai.", delay = 15},
+    {msg = "Failure se mat daro, kyunki har galti tumhe us manzil ke ek kadam aur kareeb le jati hai.", delay = 15},
+    {msg = "Future mein tum kahan hoge, ye aaj ke tumhare faisle tay karenge, toh aaj ka din zaya mat jaane do.", delay = 15},
+    {msg = "Bade bano, itne bade ki tumhari kahani dusron ke liye inspiration ban jaye. Keep grinding, keep growing!", delay = 15},
+    
+    -- Final Personal Introduction (3-4 seconds gap)
+    {msg = "Ab thoda mere baare mein, I am Yash, from Kota, Rajasthan.", delay = 4},
+    {msg = "I am currently studying at MNNIT Allahabad.", delay = 4},
+    {msg = "Nice to meet you all! Agar aapko coding ya kisi bhi cheez mein koi problem face ho, toh mujhe zaroor batana.", delay = 4},
+    {msg = "All rights reserved to NOT_IITIAN. Signing off!", delay = 0}
+}
+
+local function sendChatMessage(msg)
+    pcall(function()
+        if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+            local textChannels = TextChatService:FindFirstChild("TextChannels")
+            local channel = textChannels and textChannels:FindFirstChild("RBXGeneral")
+            if channel then 
+                channel:SendAsync(msg) 
+            else
+                local foundChannel = TextChatService:FindFirstChild("RBXGeneral", true)
+                if foundChannel and foundChannel:IsA("TextChannel") then
+                    foundChannel:SendAsync(msg)
+                end
+            end
+        else
+            ChatService:Chat(workspace, msg, Enum.ChatColor.Blue)
+        end
+    end)
+end
+
+-- Systematic Broadcast Sequence
+task.spawn(function()
+    for _, item in ipairs(messages) do
+        sendChatMessage("[NOT_IITIAN]: " .. item.msg)
+        task.wait(item.delay)
+    end
+end)
+
+print("Systematic Motivational Speech Started by NOT_IITIAN!")
+
