@@ -1,0 +1,569 @@
+--[[\
+    (C) All rights reserved to NOT_IITIAN
+    Quiz: Animal Kingdom Hard Level Simulation (With Live GUI Controller Integration)
+]]--
+
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local TextChatService = game:GetService("TextChatService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ChatService = game:GetService("Chat")
+local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
+
+-- Clean up any existing UI
+if CoreGui:FindFirstChild("AnimalHardQuizControllerUI") then
+    CoreGui.AnimalHardQuizControllerUI:Destroy()
+end
+
+----------------------------------------------------
+-- GLOBAL CONFIGURATION & STATES
+----------------------------------------------------
+local QuizConfig = {
+    IsRunning = true,
+    ReadTime = 16,            -- Default reading time (seconds)
+    WithOptions = true,       -- Default mode: WITH OPTIONS
+    IgnoredPlayers = {},      -- Spammer usernames list
+    Connections = {}          -- Store connections for clean force stop
+}
+
+local playerScores = {}
+local playerNames = {}
+local hasGuessedOption = {} 
+local quizActive = false
+local optionsAllowed = false 
+local isProcessingAnswer = false
+local correctAnswer = ""     
+local currentWordAnswer = "" 
+local currentQuestionIndex = 1
+local questionSession = 0
+
+-- BLACKLISTED PLAYERS (Banned from Quiz)
+local blacklistedPlayers = {
+	["DELTAFIRE2303"] = true,
+	["VERSA_TILE000"] = true
+}
+
+-- CONFIGURABLE TIMINGS (Seconds)
+local TIMING_DIRECT_OPEN_DELAY = 3
+local TIMING_OPTION_GAP = 2
+local TIMING_ANSWER_WAIT = 12
+local TIMING_POST_ANSWER = 3
+
+----------------------------------------------------
+-- GUI CREATION
+----------------------------------------------------
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "AnimalHardQuizControllerUI"
+screenGui.ResetOnSpawn = false
+
+if syn and syn.protect_gui then
+    syn.protect_gui(screenGui)
+    screenGui.Parent = CoreGui
+elseif gethui then
+    screenGui.Parent = gethui()
+else
+    screenGui.Parent = CoreGui
+end
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 320, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -160, 0.35, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 30)
+mainFrame.BorderSizePixel = 0
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Size = UDim2.new(1, 0, 0, 40)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "🦁 Animal Hard Level (NOT_IITIAN)"
+titleLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+titleLabel.TextSize = 13
+titleLabel.Font = Enum.Font.SourceSansBold
+titleLabel.Parent = mainFrame
+
+-- 1. READ TIME CONTROL
+local timeLabel = Instance.new("TextLabel")
+timeLabel.Position = UDim2.new(0, 15, 0, 50)
+timeLabel.Size = UDim2.new(0, 150, 0, 30)
+timeLabel.BackgroundTransparency = 1
+timeLabel.Text = "Read Time (Sec):"
+timeLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+timeLabel.Font = Enum.Font.SourceSans
+timeLabel.TextSize = 14
+timeLabel.TextXAlignment = Enum.TextXAlignment.Left
+timeLabel.Parent = mainFrame
+
+local timeInput = Instance.new("TextBox")
+timeInput.Position = UDim2.new(0, 175, 0, 50)
+timeInput.Size = UDim2.new(0, 130, 0, 30)
+timeInput.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+timeInput.Text = tostring(QuizConfig.ReadTime)
+timeInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+timeInput.Font = Enum.Font.SourceSans
+timeInput.TextSize = 14
+timeInput.Parent = mainFrame
+
+local timeCorner = Instance.new("UICorner")
+timeCorner.CornerRadius = UDim.new(0, 6)
+timeCorner.Parent = timeInput
+
+timeInput.FocusLost:Connect(function()
+    local val = tonumber(timeInput.Text)
+    if val and val > 0 then
+        QuizConfig.ReadTime = val
+        print("[GUI] Read Time updated to: " .. val .. "s")
+    else
+        timeInput.Text = tostring(QuizConfig.ReadTime)
+    end
+end)
+
+-- 2. SPAMMER IGNORE INPUT
+local ignoreInput = Instance.new("TextBox")
+ignoreInput.Position = UDim2.new(0, 15, 0, 95)
+ignoreInput.Size = UDim2.new(0, 190, 0, 30)
+ignoreInput.BackgroundColor3 = Color3.fromRGB(40, 40, 48)
+ignoreInput.PlaceholderText = "Enter Spammer Username"
+ignoreInput.Text = ""
+ignoreInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreInput.Font = Enum.Font.SourceSans
+ignoreInput.TextSize = 13
+ignoreInput.Parent = mainFrame
+
+local ignoreCorner = Instance.new("UICorner")
+ignoreCorner.CornerRadius = UDim.new(0, 6)
+ignoreCorner.Parent = ignoreInput
+
+local ignoreBtn = Instance.new("TextButton")
+ignoreBtn.Position = UDim2.new(0, 212, 0, 95)
+ignoreBtn.Size = UDim2.new(0, 93, 0, 30)
+ignoreBtn.BackgroundColor3 = Color3.fromRGB(210, 130, 20)
+ignoreBtn.Text = "Ignore"
+ignoreBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+ignoreBtn.Font = Enum.Font.SourceSansBold
+ignoreBtn.TextSize = 13
+ignoreBtn.Parent = mainFrame
+
+local btnCorner1 = Instance.new("UICorner")
+btnCorner1.CornerRadius = UDim.new(0, 6)
+btnCorner1.Parent = ignoreBtn
+
+ignoreBtn.MouseButton1Click:Connect(function()
+    local name = ignoreInput.Text:gsub("%s+", "")
+    if name ~= "" then
+        QuizConfig.IgnoredPlayers[name:lower()] = true
+        print("[GUI] Ignored player added: " .. name)
+        ignoreInput.Text = ""
+        ignoreBtn.Text = "Added!"
+        task.wait(1)
+        ignoreBtn.Text = "Ignore"
+    end
+end)
+
+-- 3. WITH / WITHOUT OPTION TOGGLE
+local modeBtn = Instance.new("TextButton")
+modeBtn.Position = UDim2.new(0, 15, 0, 140)
+modeBtn.Size = UDim2.new(0, 290, 0, 35)
+modeBtn.BackgroundColor3 = Color3.fromRGB(45, 85, 155)
+modeBtn.Text = "Mode: WITH OPTIONS"
+modeBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+modeBtn.Font = Enum.Font.SourceSansBold
+modeBtn.TextSize = 14
+modeBtn.Parent = mainFrame
+
+local modeCorner = Instance.new("UICorner")
+modeCorner.CornerRadius = UDim.new(0, 6)
+modeCorner.Parent = modeBtn
+
+modeBtn.MouseButton1Click:Connect(function()
+    QuizConfig.WithOptions = not QuizConfig.WithOptions
+    if QuizConfig.WithOptions then
+        modeBtn.Text = "Mode: WITH OPTIONS"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(45, 85, 155)
+    else
+        modeBtn.Text = "Mode: WITHOUT OPTIONS"
+        modeBtn.BackgroundColor3 = Color3.fromRGB(120, 50, 150)
+    end
+end)
+
+-- Cleanup & Destroy Function
+local function destroyGUIAndStop()
+    QuizConfig.IsRunning = false
+    quizActive = false
+    optionsAllowed = false
+    
+    for _, conn in pairs(QuizConfig.Connections) do
+        if conn and conn.Connected then
+            conn:Disconnect()
+        end
+    end
+    
+    if screenGui and screenGui.Parent then
+        screenGui:Destroy()
+    end
+    print("[SYSTEM] Animal Hard Controller Shut Down Successfully.")
+end
+
+-- 4. FORCE STOP BUTTON
+local shutdownBtn = Instance.new("TextButton")
+shutdownBtn.Position = UDim2.new(0, 15, 0, 190)
+shutdownBtn.Size = UDim2.new(0, 290, 0, 40)
+shutdownBtn.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+shutdownBtn.Text = "🛑 FORCE STOP & CLOSE"
+shutdownBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+shutdownBtn.Font = Enum.Font.SourceSansBold
+shutdownBtn.TextSize = 15
+shutdownBtn.Parent = mainFrame
+
+local stopCorner = Instance.new("UICorner")
+stopCorner.CornerRadius = UDim.new(0, 6)
+stopCorner.Parent = shutdownBtn
+
+shutdownBtn.MouseButton1Click:Connect(destroyGUIAndStop)
+
+----------------------------------------------------
+-- UTILITY FUNCTIONS & CHAT SENDER
+----------------------------------------------------
+local function sendChatMessage(msg)
+	pcall(function()
+		if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+			local textChannels = TextChatService:FindFirstChild("TextChannels")
+			local channel = textChannels and textChannels:FindFirstChild("RBXGeneral")
+			if channel then 
+				channel:SendAsync(msg) 
+			else
+				local foundChannel = TextChatService:FindFirstChild("RBXGeneral", true)
+				if foundChannel and foundChannel:IsA("TextChannel") then
+					foundChannel:SendAsync(msg)
+				end
+			end
+		else
+			ChatService:Chat(workspace, msg, Enum.ChatColor.Blue)
+		end
+	end)
+end
+
+local function logInfo(message)
+	print("[NOT_IITIAN_ANIMAL_HARD]: " .. tostring(message))
+end
+
+----------------------------------------------------
+-- DATABASE: ANIMAL KINGDOM (HARD LEVEL)
+----------------------------------------------------
+local quizDatabase = {
+	{ 
+		Question = "[Animal Hard] Which copper-based oxygen-transport protein causes the blood of octopuses and horseshoe crabs to appear blue?", 
+		Options = {"A) Hemoglobin", "B) Hemocyanin", "C) Hemerythrin", "D) Myoglobin"}, 
+		Answer = "B", 
+		WordAnswer = "HEMOCYANIN" 
+	},
+	{ 
+		Question = "[Animal Hard] What sensory organ, found in snakes and lizards, detects non-volatile chemical signals and pheromones?", 
+		Options = {"A) Weberian Apparatus", "B) Organ of Corti", "C) Jacobson's Organ", "D) Ampullae of Lorenzini"}, 
+		Answer = "C", 
+		WordAnswer = "JACOBSONSORGAN" 
+	},
+	{ 
+		Question = "[Animal Hard] What specialized electroreceptive organs allow sharks and rays to detect weak electromagnetic fields produced by prey?", 
+		Options = {"A) Lateral Line System", "B) Ampullae of Lorenzini", "C) Statocysts", "D) Otoliths"}, 
+		Answer = "B", 
+		WordAnswer = "AMPULLAEOFLORENZINI" 
+	},
+	{ 
+		Question = "[Animal Hard] Which primitive living mammal species belongs to the order Proboscidea alongside extinct mammoths?", 
+		Options = {"A) Elephant", "B) Manatee", "C) Hyrax", "D) Dugong"}, 
+		Answer = "A", 
+		WordAnswer = "ELEPHANT" 
+	},
+	{ 
+		Question = "[Animal Hard] What evolutionary state describes an animal retaining juvenile physical traits into its adult reproductive stage, as seen in axolotls?", 
+		Options = {"A) Metamorphosis", "B) Neoteny", "C) Parthenogenesis", "D) Ecdysis"}, 
+		Answer = "B", 
+		WordAnswer = "NEOTENY" 
+	},
+	{ 
+		Question = "[Animal Hard] Which mammalian taxonomic order includes even-toed ungulates such as deer, hippos, giraffes, and camels?", 
+		Options = {"A) Perissodactyla", "B) Artiodactyla", "C) Carnivora", "D) Diprotodontia"}, 
+		Answer = "B", 
+		WordAnswer = "ARTIODACTYLA" 
+	},
+	{ 
+		Question = "[Animal Hard] What specialized anatomical vocal structure allows birds to produce two independent sounds simultaneously?", 
+		Options = {"A) Larynx", "B) Syrinx", "C) Pharynx", "D) Trachea"}, 
+		Answer = "B", 
+		WordAnswer = "SYRINX" 
+	},
+	{ 
+		Question = "[Animal Hard] Which unique animal group is capable of re-entering a larval state via transdifferentiation, earning the name 'immortal jellyfish'?", 
+		Options = {"A) Turritopsis dohrnii", "B) Aurelia aurita", "C) Chironex fleckeri", "D) Physalia physalis"}, 
+		Answer = "A", 
+		WordAnswer = "TURRITOPSISDOHRNII" 
+	},
+	{ 
+		Question = "[Animal Hard] What microscopic marine organisms are renowned for surviving extreme heat, radiation, vacuum space, and desiccation in a tun state?", 
+		Options = {"A) Nematodes", "B) Tardigrades", "C) Rotifers", "D) Copepods"}, 
+		Answer = "B", 
+		WordAnswer = "TARDIGRADES" 
+	},
+	{ 
+		Question = "[Animal Hard] What reflective layer behind the retina of many nocturnal animals reflects light back through the retina to enhance night vision?", 
+		Options = {"A) Fovea Centralis", "B) Tapetum Lucidum", "C) Sclera", "D) Cornea"}, 
+		Answer = "B", 
+		WordAnswer = "TAPETUMLUCIDUM" 
+	}
+}
+
+-- Custom word answer overrides for clean matching
+quizDatabase[1].WordAnswer = "HEMOCYANIN"
+quizDatabase[2].WordAnswer = "JACOBSONSORGAN"
+quizDatabase[3].WordAnswer = "AMPULLAEOFLORENZINI"
+quizDatabase[4].WordAnswer = "ELEPHANT"
+quizDatabase[5].WordAnswer = "NEOTENY"
+quizDatabase[6].WordAnswer = "ARTIODACTYLA"
+quizDatabase[7].WordAnswer = "SYRINX"
+quizDatabase[8].WordAnswer = "TURRITOPSISDOHRNII"
+quizDatabase[9].WordAnswer = "TARDIGRADES"
+quizDatabase[10].WordAnswer = "TAPETUMLUCIDUM"
+
+local askNextQuestion
+local showLeaderboard
+local triggerWin
+
+-- SMART WAIT FUNCTION (Checks IsRunning for dynamic cancellation)
+local function smartWait(seconds)
+	local elapsed = 0
+	while elapsed < seconds do
+		if not QuizConfig.IsRunning then return false end
+		task.wait(0.2)
+		elapsed += 0.2
+	end
+	return true
+end
+
+----------------------------------------------------
+-- LEADERBOARD SYSTEM
+----------------------------------------------------
+showLeaderboard = function()
+	quizActive = false
+	optionsAllowed = false
+	
+	logInfo("Displaying final leaderboard for Animal Hard Level.")
+	sendChatMessage("📊 --- ANIMAL KINGDOM HARD LEVEL FINAL LEADERBOARD ---")
+	if not smartWait(4) then destroyGUIAndStop() return end
+	
+	local sortedScores = {}
+	for userId, score in pairs(playerScores) do
+		table.insert(sortedScores, {name = playerNames[userId] or "Unknown", score = score})
+	end
+	
+	table.sort(sortedScores, function(a, b) 
+		return a.score > b.score 
+	end)
+	
+	if #sortedScores == 0 then
+		sendChatMessage("Nobody scored any points! 😢")
+	else
+		for rank, data in ipairs(sortedScores) do
+			sendChatMessage("🏅 Rank " .. rank .. ": " .. data.name .. " - " .. data.score .. " Pts")
+			if not smartWait(3) then destroyGUIAndStop() return end
+		end
+	end
+	
+	if not smartWait(4) then destroyGUIAndStop() return end
+	sendChatMessage("📢 Quiz finished! All rights reserved to NOT_IITIAN! 🛡️⭐")
+    
+    -- Auto Destroy UI when quiz finishes naturally
+    destroyGUIAndStop()
+end
+
+----------------------------------------------------
+-- WIN TRIGGER SYSTEM
+----------------------------------------------------
+triggerWin = function(player)
+	if isProcessingAnswer then return end
+	isProcessingAnswer = true
+	quizActive = false
+	optionsAllowed = false
+	
+	local userId = player.UserId
+	playerScores[userId] = (playerScores[userId] or 0) + 10
+	playerNames[userId] = player.DisplayName 
+	
+	logInfo("Player " .. player.Name .. " answered correctly!")
+	sendChatMessage("🎉 " .. player.DisplayName .. " Correct answer! (+10 Pts) 🎉")
+	currentQuestionIndex += 1
+	
+	task.wait(2)
+	
+	if currentQuestionIndex > #quizDatabase then 
+		task.spawn(showLeaderboard)
+	else
+		isProcessingAnswer = false
+		task.spawn(askNextQuestion)
+	end
+end
+
+----------------------------------------------------
+-- ANSWER PARSING & CHAT LISTENER LOGIC
+----------------------------------------------------
+local function onPlayerChatted(player, message)
+	if not QuizConfig.IsRunning or not quizActive or isProcessingAnswer then return end
+	
+	-- Blacklist & Spammer Ignore check
+	local playerNameUpper = string.upper(player.Name)
+	local playerDisplayNameUpper = string.upper(player.DisplayName)
+	if blacklistedPlayers[playerNameUpper] or blacklistedPlayers[playerDisplayNameUpper] then
+		return
+	end
+    
+    if QuizConfig.IgnoredPlayers[player.Name:lower()] or QuizConfig.IgnoredPlayers[player.DisplayName:lower()] then
+        return -- Ignored Spammer
+    end
+	
+	local rawTrimmed = string.match(message, "^%s*(.-)%s*$")
+	if not rawTrimmed then return end
+	
+	local upperMsg = string.upper(rawTrimmed)
+	local cleanMsg = string.gsub(upperMsg, "[^%w]", "")
+	
+	local matchedLetter = string.match(upperMsg, "^([A-D])$") or string.match(upperMsg, "^([A-D])[%-%._%)%:]+$")
+	
+	if matchedLetter then
+		-- OPTIONS CHECK: Allowed only if mode has Options enabled
+		if not QuizConfig.WithOptions or not optionsAllowed then return end
+		
+		if hasGuessedOption[player.UserId] then 
+			return 
+		end
+		
+		hasGuessedOption[player.UserId] = true 
+		
+		if matchedLetter == correctAnswer then
+			triggerWin(player)
+		else
+			return
+		end
+	else
+		-- DIRECT WORD CHECK: Allowed instantly
+		if cleanMsg == currentWordAnswer then
+			triggerWin(player)
+		else
+			return
+		end
+	end
+end
+
+----------------------------------------------------
+-- CHAT SYSTEM HOOK INITIALIZATION
+----------------------------------------------------
+if TextChatService.ChatVersion == Enum.ChatVersion.TextChatService then
+	local conn = TextChatService.MessageReceived:Connect(function(textMessage) 
+		if textMessage.TextSource then
+			local targetPlayer = Players:GetPlayerByUserId(textMessage.TextSource.UserId) 
+			if targetPlayer then 
+				onPlayerChatted(targetPlayer, textMessage.Text) 
+			end 
+		end
+	end)
+    table.insert(QuizConfig.Connections, conn)
+else
+	local function hookPlayerInstance(plr)
+		local conn = plr.Chatted:Connect(function(chatMsg)
+			onPlayerChatted(plr, chatMsg)
+		end)
+        table.insert(QuizConfig.Connections, conn)
+	end
+
+	local connAdded = Players.PlayerAdded:Connect(hookPlayerInstance)
+    table.insert(QuizConfig.Connections, connAdded)
+    
+	for _, existingPlayer in ipairs(Players:GetPlayers()) do
+		hookPlayerInstance(existingPlayer)
+	end
+end
+
+----------------------------------------------------
+-- QUESTION FLOW MANAGEMENT
+----------------------------------------------------
+askNextQuestion = function()
+	if not QuizConfig.IsRunning then return end
+
+	if currentQuestionIndex > #quizDatabase then
+		showLeaderboard()
+		return
+	end
+
+	local currentQuiz = quizDatabase[currentQuestionIndex]
+	correctAnswer = string.upper(string.gsub(currentQuiz.Answer, "[^%w]", ""))
+	currentWordAnswer = string.upper(string.gsub(currentQuiz.WordAnswer, "[^%w]", ""))
+	
+	questionSession += 1
+	local currentSession = questionSession
+	
+	hasGuessedOption = {} 
+	quizActive = true
+	optionsAllowed = false 
+	isProcessingAnswer = false
+	
+	logInfo("Asking question index: " .. currentQuestionIndex)
+	
+	-- 1. Direct Word open notification comes FIRST
+	sendChatMessage("💡 Direct Word Guessing is OPEN NOW! (Unlimited Tries)")
+	
+	if not smartWait(TIMING_DIRECT_OPEN_DELAY) then return end 
+	if not quizActive or questionSession ~= currentSession then return end
+	
+	-- 2. Broadcast the Question Text
+	sendChatMessage(currentQuiz.Question)
+	
+	-- 3. Question Reading Phase (Uses dynamic ReadTime from GUI!)
+	if not smartWait(QuizConfig.ReadTime) then return end 
+	if not quizActive or questionSession ~= currentSession then return end
+	
+	-- 4. OPTIONS HANDLING (Checks if 'WITH OPTIONS' mode is active in GUI)
+    if QuizConfig.WithOptions then
+        optionsAllowed = true
+        for _, optionText in ipairs(currentQuiz.Options) do 
+            sendChatMessage(optionText)
+            if not smartWait(TIMING_OPTION_GAP) then return end 
+            if not quizActive or questionSession ~= currentSession then return end
+        end
+    else
+        optionsAllowed = false
+    end
+	
+	if not smartWait(TIMING_ANSWER_WAIT) then return end 
+	
+	if quizActive and questionSession == currentSession then
+		quizActive = false
+		optionsAllowed = false
+		sendChatMessage("⏳ Time's up! Correct answer was: " .. correctAnswer .. " (" .. currentWordAnswer .. ")")
+		currentQuestionIndex += 1
+		
+		task.wait(TIMING_POST_ANSWER)
+		
+		if currentQuestionIndex <= #quizDatabase then 
+			task.spawn(askNextQuestion) 
+		else
+			task.spawn(showLeaderboard) 
+		end
+	end
+end
+
+----------------------------------------------------
+-- SCRIPT INITIALIZATION
+----------------------------------------------------
+task.spawn(function()
+	logInfo("Starting Animal Kingdom Hard Level Script Sequence...")
+	sendChatMessage("(C) All rights reserved to NOT_IITIAN")
+	if not smartWait(3) then return end 
+	sendChatMessage("=== 🦁 ANIMAL KINGDOM HARD LEVEL QUIZ STARTING ===")
+	if not smartWait(3) then return end 
+	askNextQuestion()
+end)
